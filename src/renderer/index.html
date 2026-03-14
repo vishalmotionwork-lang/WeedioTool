@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>WeedioTool</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Draggable titlebar area (macOS) -->
+  <div class="titlebar">
+    <span class="titlebar-title">WeedioTool</span>
+  </div>
+
+  <!-- Main content -->
+  <div class="container">
+    <!-- Status bar -->
+    <div class="status-bar" id="statusBar">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Initializing...</span>
+    </div>
+
+    <!-- URL Input — clean layout -->
+    <div class="input-section">
+      <div class="url-input-wrapper">
+        <div class="url-input-inner">
+          <input
+            type="text"
+            id="urlInput"
+            placeholder="Paste any URL — YouTube, Instagram, Twitter, news site..."
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <span class="detect-badge" id="detectBadge" style="display:none"></span>
+        </div>
+        <button id="batchToggle" class="btn-icon" title="Batch mode — paste multiple URLs">+</button>
+        <button id="fetchBtn" class="btn-primary" disabled>
+          <span class="btn-text">Grab</span>
+          <span class="btn-loader" style="display:none"></span>
+        </button>
+      </div>
+      <!-- Batch URL input (hidden by default) -->
+      <div class="batch-input-wrapper" id="batchWrapper" style="display:none">
+        <textarea
+          id="batchInput"
+          placeholder="Paste multiple URLs, one per line..."
+          rows="4"
+          spellcheck="false"
+        ></textarea>
+        <div class="batch-actions">
+          <span class="batch-count" id="batchCount">0 URLs</span>
+          <button id="batchGrabBtn" class="btn-primary btn-sm" disabled>Grab All</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="downloads">Downloads</button>
+      <button class="tab" data-tab="images">Images</button>
+    </div>
+
+    <!-- Format picker (shown after URL fetch) -->
+    <div class="format-picker" id="formatPicker" style="display:none">
+      <div class="video-info">
+        <img id="videoThumb" src="" alt="" class="video-thumb">
+        <div class="video-details">
+          <h3 id="videoTitle"></h3>
+          <span id="videoDuration" class="video-duration"></span>
+          <span id="videoSite" class="video-site"></span>
+        </div>
+      </div>
+      <div class="format-list" id="formatList"></div>
+      <!-- Timestamp clip section -->
+      <div class="clip-section">
+        <label class="clip-toggle">
+          <input type="checkbox" id="clipEnabled">
+          <span>Clip section (download specific timestamps)</span>
+        </label>
+        <div class="clip-inputs" id="clipInputs" style="display:none">
+          <!-- Draggable range slider -->
+          <div class="clip-slider-wrapper">
+            <div class="clip-slider-track" id="clipTrack">
+              <div class="clip-slider-range" id="clipRange"></div>
+              <div class="clip-handle" id="clipHandleStart"></div>
+              <div class="clip-handle" id="clipHandleEnd"></div>
+            </div>
+            <div class="clip-slider-labels">
+              <span id="clipSliderStart">0:00</span>
+              <span id="clipSliderDuration"></span>
+              <span id="clipSliderEnd">0:00</span>
+            </div>
+          </div>
+          <!-- Manual time inputs -->
+          <div class="clip-fields">
+            <div class="clip-field">
+              <label>Start</label>
+              <input type="text" id="clipStart" placeholder="0:00" spellcheck="false">
+            </div>
+            <div class="clip-field">
+              <label>End</label>
+              <input type="text" id="clipEnd" placeholder="e.g. 2:30" spellcheck="false">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="format-actions">
+        <button id="downloadBtn" class="btn-primary">Download Selected</button>
+        <button id="cancelFetchBtn" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Downloads tab (active + history merged) -->
+    <div class="tab-content active" id="downloadsTab">
+      <div class="empty-state" id="emptyDownloads">
+        <div class="empty-icon">⬇</div>
+        <p>Paste a URL above to start downloading</p>
+        <p class="empty-sub">Supports YouTube, Instagram, Twitter/X, LinkedIn, news sites & 1800+ more</p>
+      </div>
+      <div class="download-list" id="downloadList"></div>
+      <div class="history-section" id="historySection" style="display:none">
+        <div class="history-divider">
+          <span>Previous Downloads</span>
+          <button id="clearHistoryBtn" class="btn-danger-small">Clear</button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </div>
+
+    <!-- Images tab -->
+    <div class="tab-content" id="imagesTab">
+      <div class="empty-state" id="emptyImages">
+        <div class="empty-icon">🖼</div>
+        <p>Paste a news article or website URL to extract images</p>
+      </div>
+      <div class="image-grid" id="imageGrid"></div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
