@@ -9,12 +9,21 @@ const BINARIES_DIR = path.join(app.getPath("userData"), "bin");
 
 function getPlatformInfo() {
   const platform = os.platform();
+  const arch = os.arch();
 
   if (platform === "darwin") {
-    return { ytdlp: "yt-dlp_macos", ext: "" };
+    return {
+      ytdlp: "yt-dlp_macos",
+      ext: "",
+      ffmpegZip: arch === "arm64" ? "ffmpeg-darwin-arm64" : "ffmpeg-darwin-x64",
+    };
   }
 
-  return { ytdlp: "yt-dlp.exe", ext: ".exe" };
+  return {
+    ytdlp: "yt-dlp.exe",
+    ext: ".exe",
+    ffmpegZip: "ffmpeg-win32-x64",
+  };
 }
 
 function getYtdlpPath() {
@@ -22,12 +31,33 @@ function getYtdlpPath() {
   return path.join(BINARIES_DIR, `yt-dlp${info.ext}`);
 }
 
+function getLocalFfmpegPath() {
+  const info = getPlatformInfo();
+  return path.join(BINARIES_DIR, `ffmpeg${info.ext}`);
+}
+
 function getFfmpegPath() {
+  // 1. Check bundled ffmpeg-static (handles asar unpacking for packaged apps)
   try {
-    return require("ffmpeg-static");
+    const bundledPath = require("ffmpeg-static").replace(
+      "app.asar",
+      "app.asar.unpacked",
+    );
+    if (fs.existsSync(bundledPath)) {
+      return bundledPath;
+    }
   } catch {
-    return "ffmpeg";
+    // ffmpeg-static not available
   }
+
+  // 2. Check locally downloaded ffmpeg in app's bin directory
+  const localPath = getLocalFfmpegPath();
+  if (fs.existsSync(localPath)) {
+    return localPath;
+  }
+
+  // 3. Fallback to system ffmpeg (rarely available for end users)
+  return "ffmpeg";
 }
 
 function ensureBinDir() {
@@ -88,6 +118,43 @@ function downloadFile(url, destPath) {
   });
 }
 
+async function downloadFfmpeg() {
+  ensureBinDir();
+  const info = getPlatformInfo();
+  const ext = info.ext || "";
+  const destPath = path.join(BINARIES_DIR, `ffmpeg${ext}`);
+
+  // Use ffmpeg-static's GitHub releases (same source as the npm package)
+  const version = "b6.0";
+  const zipName = `${info.ffmpegZip}.gz`;
+  const url = `https://github.com/eugeneware/ffmpeg-static/releases/download/${version}/${zipName}`;
+
+  console.log("Downloading ffmpeg...");
+  const gzPath = path.join(BINARIES_DIR, zipName);
+  await downloadFile(url, gzPath);
+
+  // Decompress .gz to get the ffmpeg binary
+  const zlib = require("zlib");
+  await new Promise((resolve, reject) => {
+    const input = fs.createReadStream(gzPath);
+    const output = fs.createWriteStream(destPath);
+    input
+      .pipe(zlib.createGunzip())
+      .pipe(output)
+      .on("finish", resolve)
+      .on("error", reject);
+  });
+
+  // Cleanup gz and set executable
+  fs.unlinkSync(gzPath);
+  if (os.platform() !== "win32") {
+    fs.chmodSync(destPath, 0o755);
+  }
+
+  console.log("\nffmpeg downloaded successfully");
+  return destPath;
+}
+
 async function downloadYtdlp() {
   ensureBinDir();
   const info = getPlatformInfo();
@@ -119,6 +186,13 @@ async function updateYtdlp() {
   });
 }
 
+function isFfmpegAvailable() {
+  const ffmpegPath = getFfmpegPath();
+  // "ffmpeg" means no bundled or local binary was found
+  if (ffmpegPath === "ffmpeg") return false;
+  return fs.existsSync(ffmpegPath);
+}
+
 async function ensureBinaries(onProgress) {
   ensureBinDir();
   const ytdlpPath = getYtdlpPath();
@@ -129,6 +203,12 @@ async function ensureBinaries(onProgress) {
   } else {
     if (onProgress) onProgress("Checking for updates...");
     await updateYtdlp();
+  }
+
+  // Ensure ffmpeg is available (bundled, local, or download it)
+  if (!isFfmpegAvailable()) {
+    if (onProgress) onProgress("Downloading ffmpeg (first launch)...");
+    await downloadFfmpeg();
   }
 
   if (onProgress) onProgress("Ready");
@@ -150,7 +230,11 @@ function getVideoInfo(url) {
     "youtube:skip=dash,translated_subs",
   ];
 
-  // No cookies by default — avoids macOS Keychain password prompts
+  // Add platform cookies if available (saved from embedded browser login)
+  const { getCookieArgsForUrl } = require("./platform-auth");
+  const cookieArgs = getCookieArgsForUrl(url);
+  args.push(...cookieArgs);
+
   args.push(url);
 
   return new Promise((resolve, reject) => {
@@ -220,6 +304,11 @@ function startDownload(
     args.push("--download-sections", `*${start}-${end}`);
     args.push("--force-keyframes-at-cuts");
   }
+
+  // Add platform cookies if available
+  const { getCookieArgsForUrl } = require("./platform-auth");
+  const dlCookieArgs = getCookieArgsForUrl(url);
+  args.push(...dlCookieArgs);
 
   args.push(url);
 

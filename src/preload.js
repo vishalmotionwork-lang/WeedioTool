@@ -28,6 +28,19 @@ contextBridge.exposeInMainWorld("mediagrab", {
   getAppStatus: () => ipcRenderer.invoke("get-app-status"),
   getBrowsers: () => ipcRenderer.invoke("get-browsers"),
 
+  // Transcripts
+  fetchChannelVideos: (channelUrl, limit) =>
+    ipcRenderer.invoke("fetch-channel-videos", channelUrl, limit),
+  transcribeVideos: (videos, outputDir) =>
+    ipcRenderer.invoke("transcribe-videos", videos, outputDir),
+
+  // Platform Auth
+  platformLogin: (platformId) =>
+    ipcRenderer.invoke("platform-login", platformId),
+  platformLoginStatus: () => ipcRenderer.invoke("platform-login-status"),
+  platformLogout: (platformId) =>
+    ipcRenderer.invoke("platform-logout", platformId),
+
   onDownloadStarted: (callback) => {
     ipcRenderer.on("download:started", (_, data) => callback(data));
   },
@@ -48,6 +61,9 @@ contextBridge.exposeInMainWorld("mediagrab", {
   },
   onStatusUpdate: (callback) => {
     ipcRenderer.on("status:update", (_, data) => callback(data));
+  },
+  onTranscriptProgress: (callback) => {
+    ipcRenderer.on("transcript:progress", (_, data) => callback(data));
   },
 
   removeAllListeners: (channel) => {

@@ -24,6 +24,12 @@ const {
 } = require("./image-scraper");
 const { getCookieArgs, getBrowserList } = require("./cookie-manager");
 const { createTray, destroyTray } = require("./tray");
+const { fetchChannelVideos, transcribeVideo } = require("./transcript-manager");
+const {
+  openLoginWindow,
+  getLoginStatus,
+  clearPlatformCookies,
+} = require("./platform-auth");
 
 let mainWindow = null;
 let downloadManager = null;
@@ -112,6 +118,7 @@ ipcMain.handle("start-download", async (_, options) => {
     site,
     clipStart,
     clipEnd,
+    directUrl,
   } = options;
 
   const result = await dialog.showSaveDialog(mainWindow, {
@@ -141,6 +148,7 @@ ipcMain.handle("start-download", async (_, options) => {
     site,
     clipStart,
     clipEnd,
+    directUrl,
   });
 
   return { success: true, ...downloadResult };
@@ -234,6 +242,84 @@ ipcMain.handle("get-app-status", () => {
 
 ipcMain.handle("get-browsers", () => {
   return getBrowserList();
+});
+
+// --- Transcript Handlers ---
+
+ipcMain.handle("fetch-channel-videos", async (_, channelUrl, limit) => {
+  try {
+    const videos = await fetchChannelVideos(channelUrl, limit || 100);
+    return { success: true, data: videos };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("transcribe-videos", async (_, videos, outputDir) => {
+  const results = [];
+  for (let i = 0; i < videos.length; i++) {
+    const video = videos[i];
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("transcript:progress", {
+          index: i,
+          total: videos.length,
+          title: video.title,
+          status: "processing",
+        });
+      }
+
+      const result = await transcribeVideo(video.url, outputDir, video.title);
+      results.push({ ...result, success: true });
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("transcript:progress", {
+          index: i,
+          total: videos.length,
+          title: video.title,
+          status: "complete",
+          outputPath: result.outputPath,
+        });
+      }
+    } catch (error) {
+      results.push({
+        title: video.title,
+        success: false,
+        error: error.message,
+      });
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("transcript:progress", {
+          index: i,
+          total: videos.length,
+          title: video.title,
+          status: "error",
+          error: error.message,
+        });
+      }
+    }
+  }
+  return { success: true, data: results };
+});
+
+// --- Platform Auth Handlers ---
+
+ipcMain.handle("platform-login", async (_, platformId) => {
+  try {
+    const result = await openLoginWindow(platformId, mainWindow);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("platform-login-status", () => {
+  return getLoginStatus();
+});
+
+ipcMain.handle("platform-logout", (_, platformId) => {
+  clearPlatformCookies(platformId);
+  return { success: true };
 });
 
 function sanitizeFilename(name) {

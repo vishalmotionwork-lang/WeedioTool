@@ -6,6 +6,14 @@ const state = {
   selectedFormat: null,
   downloads: new Map(),
   fetchingInfo: false,
+  // Transcript state
+  channelVideos: [], // all fetched videos
+  displayedVideos: [], // currently shown (sorted + paginated)
+  selectedVideos: new Set(), // selected video IDs
+  transcriptSort: "date", // 'date' or 'views'
+  transcriptPage: 0, // pagination offset
+  transcriptPageSize: 10,
+  transcribing: false,
 };
 
 // ===== DOM REFS =====
@@ -27,6 +35,7 @@ function init() {
   setupEventListeners();
   setupIpcListeners();
   loadHistory();
+  loadAccountsTab();
 }
 
 // ===== EVENT LISTENERS =====
@@ -123,6 +132,56 @@ function setupEventListeners() {
     loadHistory();
     showToast("History cleared");
   });
+
+  // --- Transcript Tab ---
+  const channelInput = $("#channelUrlInput");
+  const fetchChannelBtn = $("#fetchChannelBtn");
+
+  channelInput.addEventListener("input", () => {
+    fetchChannelBtn.disabled = !channelInput.value.trim();
+  });
+
+  channelInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && channelInput.value.trim()) {
+      handleFetchChannel();
+    }
+  });
+
+  fetchChannelBtn.addEventListener("click", handleFetchChannel);
+
+  // Filter buttons
+  $$("#transcriptToolbar .filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$("#transcriptToolbar .filter-btn").forEach((b) =>
+        b.classList.remove("active"),
+      );
+      btn.classList.add("active");
+      state.transcriptSort = btn.dataset.sort;
+      state.transcriptPage = 0;
+      state.selectedVideos.clear();
+      renderTranscriptVideos();
+    });
+  });
+
+  // Select all
+  $("#selectAllVideos").addEventListener("change", (e) => {
+    const visible = getVisibleVideos();
+    if (e.target.checked) {
+      visible.forEach((v) => state.selectedVideos.add(v.id));
+    } else {
+      state.selectedVideos.clear();
+    }
+    renderTranscriptVideos();
+  });
+
+  // Transcribe button
+  $("#transcribeBtn").addEventListener("click", handleTranscribe);
+
+  // Load more
+  $("#loadMoreBtn").addEventListener("click", () => {
+    state.transcriptPage++;
+    renderTranscriptVideos();
+  });
 }
 
 // ===== IPC LISTENERS =====
@@ -194,6 +253,11 @@ function setupIpcListeners() {
       item.position = data.position;
       renderDownloadItem(item);
     }
+  });
+
+  // Transcript progress
+  window.mediagrab.onTranscriptProgress((data) => {
+    updateTranscriptProgress(data);
   });
 }
 
@@ -283,6 +347,19 @@ function detectUrlType(url) {
       label: "Reddit Post",
       icon: "💬",
     },
+    // YouTube channel → route to Transcripts tab
+    {
+      match: /youtube\.com\/@[^/]+\/?$/i,
+      type: "channel",
+      label: "YouTube Channel",
+      icon: "📝",
+    },
+    {
+      match: /youtube\.com\/(channel|c)\//i,
+      type: "channel",
+      label: "YouTube Channel",
+      icon: "📝",
+    },
     // Image-only sites
     { match: /pinterest\.com/i, type: "image", label: "Pinterest", icon: "📌" },
     { match: /flickr\.com/i, type: "image", label: "Flickr", icon: "📷" },
@@ -325,6 +402,18 @@ async function handleFetch() {
 
   const detected = detectUrlType(url);
   showToast(`${detected.icon} Detected: ${detected.label}`, "");
+
+  // Channel URL → route to Transcripts tab
+  if (detected.type === "channel") {
+    $("#channelUrlInput").value = url;
+    urlInput.value = "";
+    fetchBtn.disabled = true;
+    switchTab("transcripts");
+    state.fetchingInfo = false;
+    setFetchLoading(false);
+    handleFetchChannel();
+    return;
+  }
 
   if (detected.type === "video") {
     // Pure video — fetch info and show format picker
@@ -401,29 +490,30 @@ async function handleFetchError(url, errorMsg, detected) {
 
   if (isTwitter) {
     showErrorPanel(
-      "X/Twitter requires login to access content",
+      "X/Twitter — could not fetch this video",
       [
-        "X/Twitter blocks all downloads without a logged-in session",
-        "Open Brave or Chrome → go to x.com → log in to your account",
-        "Once logged in, WeedioTool can access your session automatically",
-        "After logging in, restart WeedioTool and try again",
-        "Note: This is a Twitter restriction, not a WeedioTool limitation",
+        "Direct API methods didn't find a video in this tweet",
+        "Go to the <strong>Accounts</strong> tab and connect your X account for full access",
+        "After connecting, try this URL again — no restart needed",
+        "Make sure the tweet actually contains a video (not just images or text)",
       ],
       errorMsg,
+      { platform: "twitter", label: "Connect X / Twitter" },
     );
     return;
   }
 
   if (isInstagram) {
     showErrorPanel(
-      "Instagram — this content may be private",
+      "Instagram — login required",
       [
-        "Public reels and posts usually work without login",
-        "If this is a private account, open Brave/Chrome → log in to Instagram",
-        "After logging in, restart WeedioTool and try again",
-        "Make sure the URL points to a specific post (not a profile page)",
+        "Instagram blocks most downloads without an active session",
+        "Go to the <strong>Accounts</strong> tab and log in to Instagram",
+        "After connecting, try this URL again — no restart needed",
+        "Make sure the URL points to a specific post or reel (not a profile page)",
       ],
       errorMsg,
+      { platform: "instagram", label: "Connect Instagram" },
     );
     return;
   }
@@ -433,11 +523,12 @@ async function handleFetchError(url, errorMsg, detected) {
       "LinkedIn — could not access this post",
       [
         "Most public LinkedIn posts with video work without login",
-        "If this post is private or restricted, open Brave/Chrome → log in to LinkedIn",
+        "If restricted, go to the <strong>Accounts</strong> tab and connect LinkedIn",
         "Make sure the post URL is complete (not shortened)",
-        "After logging in, restart WeedioTool and try again",
+        "After connecting, try this URL again — no restart needed",
       ],
       errorMsg,
+      { platform: "linkedin", label: "Connect LinkedIn" },
     );
     return;
   }
@@ -470,7 +561,7 @@ async function handleFetchError(url, errorMsg, detected) {
   );
 }
 
-function showErrorPanel(title, steps, rawError) {
+function showErrorPanel(title, steps, rawError, loginAction) {
   // Remove any existing error panel
   const existing = document.getElementById("errorPanel");
   if (existing) existing.remove();
@@ -487,9 +578,17 @@ function showErrorPanel(title, steps, rawError) {
     <div class="error-panel-steps">
       <p>How to fix:</p>
       <ol>
-        ${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}
+        ${steps.map((s) => `<li>${s}</li>`).join("")}
       </ol>
     </div>
+    ${
+      loginAction
+        ? `<div class="error-panel-login">
+        <button class="btn-primary btn-sm" data-action="quick-login" data-platform="${loginAction.platform}">${escapeHtml(loginAction.label)}</button>
+        <button class="btn-secondary btn-sm" data-action="go-accounts">Go to Accounts</button>
+      </div>`
+        : ""
+    }
     ${rawError ? `<details class="error-panel-details"><summary>Technical details</summary><code>${escapeHtml(rawError).slice(0, 200)}</code></details>` : ""}
   `;
 
@@ -497,9 +596,42 @@ function showErrorPanel(title, steps, rawError) {
     .querySelector('[data-action="close-error"]')
     .addEventListener("click", () => panel.remove());
 
+  // Quick login button
+  const quickLoginBtn = panel.querySelector('[data-action="quick-login"]');
+  if (quickLoginBtn) {
+    quickLoginBtn.addEventListener("click", async () => {
+      const platform = quickLoginBtn.dataset.platform;
+      quickLoginBtn.disabled = true;
+      quickLoginBtn.textContent = "Opening...";
+      const result = await window.mediagrab.platformLogin(platform);
+      if (result.success) {
+        showToast("Connected! Try your URL again.", "success");
+        panel.remove();
+        loadAccountsTab();
+      } else if (result.error !== "Login window closed") {
+        showToast(`Login failed: ${result.error}`, "error");
+        quickLoginBtn.disabled = false;
+        quickLoginBtn.textContent = loginAction.label;
+      } else {
+        quickLoginBtn.disabled = false;
+        quickLoginBtn.textContent = loginAction.label;
+      }
+    });
+  }
+
+  // Go to accounts button
+  const goAccountsBtn = panel.querySelector('[data-action="go-accounts"]');
+  if (goAccountsBtn) {
+    goAccountsBtn.addEventListener("click", () => {
+      panel.remove();
+      switchTab("accounts");
+      loadAccountsTab();
+    });
+  }
+
   // Insert after format picker
-  const formatPicker = $("#formatPicker");
-  formatPicker.parentNode.insertBefore(panel, formatPicker.nextSibling);
+  const fpEl = $("#formatPicker");
+  fpEl.parentNode.insertBefore(panel, fpEl.nextSibling);
   switchTab("downloads");
 }
 
@@ -707,6 +839,7 @@ async function handleDownload() {
     site: info.extractor,
     clipStart,
     clipEnd,
+    directUrl: info._directUrl || null,
   });
 
   if (result.success) {
@@ -1257,6 +1390,343 @@ function debounce(fn, delay) {
     clearTimeout(timer);
     timer = setTimeout(() => fn.apply(this, args), delay);
   };
+}
+
+// ===== TRANSCRIPT FUNCTIONS =====
+
+async function handleFetchChannel() {
+  const url = $("#channelUrlInput").value.trim();
+  if (!url || state.transcribing) return;
+
+  // Validate it looks like a YouTube channel
+  if (!/youtube\.com\/@|youtube\.com\/channel\/|youtube\.com\/c\//i.test(url)) {
+    showToast("Please enter a valid YouTube channel URL", "error");
+    return;
+  }
+
+  const btn = $("#fetchChannelBtn");
+  const btnText = btn.querySelector(".btn-text");
+  const btnLoader = btn.querySelector(".btn-loader");
+  btn.disabled = true;
+  btnText.style.display = "none";
+  btnLoader.style.display = "inline-block";
+
+  try {
+    const result = await window.mediagrab.fetchChannelVideos(url, 100);
+    if (result.success && result.data.length > 0) {
+      state.channelVideos = result.data;
+      state.transcriptPage = 0;
+      state.selectedVideos.clear();
+      state.transcriptSort = "date";
+
+      // Reset filter buttons
+      $$("#transcriptToolbar .filter-btn").forEach((b) =>
+        b.classList.remove("active"),
+      );
+      $$("#transcriptToolbar .filter-btn")[0].classList.add("active");
+      $("#selectAllVideos").checked = false;
+
+      $("#transcriptToolbar").style.display = "flex";
+      $("#emptyTranscripts").style.display = "none";
+      $("#transcriptProgress").style.display = "none";
+
+      renderTranscriptVideos();
+      showToast(`Loaded ${result.data.length} videos`);
+    } else {
+      showToast(result.error || "No videos found on this channel", "error");
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, "error");
+  }
+
+  btn.disabled = false;
+  btnText.style.display = "inline";
+  btnLoader.style.display = "none";
+}
+
+function getSortedVideos() {
+  const videos = [...state.channelVideos];
+  if (state.transcriptSort === "views") {
+    videos.sort((a, b) => b.viewCount - a.viewCount);
+  }
+  // 'date' keeps original order (yt-dlp returns newest first by default)
+  return videos;
+}
+
+function getVisibleVideos() {
+  const sorted = getSortedVideos();
+  const end = (state.transcriptPage + 1) * state.transcriptPageSize;
+  return sorted.slice(0, end);
+}
+
+function renderTranscriptVideos() {
+  const list = $("#transcriptVideoList");
+  const sorted = getSortedVideos();
+  const visible = getVisibleVideos();
+
+  list.innerHTML = "";
+
+  for (const video of visible) {
+    const isSelected = state.selectedVideos.has(video.id);
+    const card = document.createElement("div");
+    card.className = `transcript-video-card${isSelected ? " selected" : ""}`;
+    card.dataset.videoId = video.id;
+
+    card.innerHTML = `
+      <input type="checkbox" ${isSelected ? "checked" : ""}>
+      <img class="transcript-video-thumb" src="${escapeAttr(video.thumbnail)}" alt="" loading="lazy" onerror="this.style.display='none'">
+      <div class="transcript-video-info">
+        <div class="transcript-video-title">${escapeHtml(video.title)}</div>
+        <div class="transcript-video-meta">
+          ${video.viewCount ? `<span class="views">${formatViewCount(video.viewCount)} views</span>` : ""}
+          ${video.duration ? `<span>${formatDuration(video.duration)}</span>` : ""}
+          ${video.uploadDate ? `<span>${formatUploadDate(video.uploadDate)}</span>` : ""}
+        </div>
+      </div>
+    `;
+
+    card.addEventListener("click", (e) => {
+      if (e.target.tagName === "INPUT") return;
+      toggleVideoSelection(video.id);
+    });
+
+    card.querySelector("input").addEventListener("change", () => {
+      toggleVideoSelection(video.id);
+    });
+
+    list.appendChild(card);
+  }
+
+  // Load more button
+  const hasMore = visible.length < sorted.length;
+  const loadMoreEl = $("#transcriptLoadMore");
+  loadMoreEl.style.display = hasMore ? "flex" : "none";
+  if (hasMore) {
+    const remaining = sorted.length - visible.length;
+    $("#loadMoreBtn").textContent = `Load More (${remaining} remaining)`;
+  }
+
+  updateSelectionCount();
+}
+
+function toggleVideoSelection(videoId) {
+  if (state.selectedVideos.has(videoId)) {
+    state.selectedVideos.delete(videoId);
+  } else {
+    state.selectedVideos.add(videoId);
+  }
+
+  // Update card UI without full re-render
+  const card = $(`.transcript-video-card[data-video-id="${videoId}"]`);
+  if (card) {
+    const isSelected = state.selectedVideos.has(videoId);
+    card.classList.toggle("selected", isSelected);
+    card.querySelector("input").checked = isSelected;
+  }
+
+  updateSelectionCount();
+}
+
+function updateSelectionCount() {
+  const count = state.selectedVideos.size;
+  $("#selectedCount").textContent = `${count} selected`;
+  $("#transcribeBtn").disabled = count === 0 || state.transcribing;
+
+  // Update select-all checkbox state
+  const visible = getVisibleVideos();
+  const allSelected =
+    visible.length > 0 && visible.every((v) => state.selectedVideos.has(v.id));
+  $("#selectAllVideos").checked = allSelected;
+}
+
+async function handleTranscribe() {
+  if (state.selectedVideos.size === 0 || state.transcribing) return;
+
+  // Ask user for output folder
+  const outputDir = await window.mediagrab.selectFolder();
+  if (!outputDir) return; // cancelled
+
+  state.transcribing = true;
+  $("#transcribeBtn").disabled = true;
+  $("#transcribeBtn").textContent = "Transcribing...";
+
+  // Build the list of videos to transcribe
+  const videosToTranscribe = state.channelVideos
+    .filter((v) => state.selectedVideos.has(v.id))
+    .map((v) => ({
+      url: v.url.startsWith("http")
+        ? v.url
+        : `https://www.youtube.com/watch?v=${v.id}`,
+      title: v.title,
+      id: v.id,
+    }));
+
+  // Show progress section
+  const progressEl = $("#transcriptProgress");
+  const progressList = $("#transcriptProgressList");
+  progressEl.style.display = "block";
+  $("#transcriptProgressText").textContent =
+    `Transcribing 0/${videosToTranscribe.length}...`;
+  progressList.innerHTML = "";
+
+  for (const video of videosToTranscribe) {
+    const item = document.createElement("div");
+    item.className = "transcript-progress-item";
+    item.id = `tp-${video.id}`;
+    item.innerHTML = `
+      <span class="title">${escapeHtml(video.title)}</span>
+      <span class="status">Waiting...</span>
+    `;
+    progressList.appendChild(item);
+  }
+
+  try {
+    const result = await window.mediagrab.transcribeVideos(
+      videosToTranscribe,
+      outputDir,
+    );
+    if (result.success) {
+      const succeeded = result.data.filter((r) => r.success).length;
+      const failed = result.data.filter((r) => !r.success).length;
+      let msg = `Done! ${succeeded} transcript${succeeded !== 1 ? "s" : ""} saved`;
+      if (failed > 0) msg += `, ${failed} failed`;
+      showToast(msg, failed > 0 ? "" : "success");
+    }
+  } catch (err) {
+    showToast(`Transcription error: ${err.message}`, "error");
+  }
+
+  state.transcribing = false;
+  $("#transcribeBtn").disabled = false;
+  $("#transcribeBtn").textContent = "Transcribe Selected";
+}
+
+function updateTranscriptProgress(data) {
+  const { index, total, title, status, error } = data;
+  $("#transcriptProgressText").textContent =
+    `Transcribing ${index + 1}/${total}...`;
+
+  // Find the progress item by scanning (more reliable than ID matching)
+  const items = $$("#transcriptProgressList .transcript-progress-item");
+  const item = items[index];
+  if (!item) return;
+
+  const statusEl = item.querySelector(".status");
+  statusEl.className = `status ${status}`;
+
+  if (status === "processing") {
+    statusEl.textContent = "Processing...";
+  } else if (status === "complete") {
+    statusEl.textContent = "Done";
+  } else if (status === "error") {
+    statusEl.textContent = error || "Failed";
+  }
+
+  if (index === total - 1 && (status === "complete" || status === "error")) {
+    $("#transcriptProgressText").textContent = "Transcription complete";
+  }
+}
+
+function formatViewCount(count) {
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
+  return String(count);
+}
+
+function formatUploadDate(dateStr) {
+  // yt-dlp returns YYYYMMDD format
+  if (!dateStr || dateStr.length !== 8) return dateStr;
+  const year = dateStr.slice(0, 4);
+  const month = dateStr.slice(4, 6);
+  const day = dateStr.slice(6, 8);
+  try {
+    const date = new Date(`${year}-${month}-${day}`);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+// ===== ACCOUNTS TAB =====
+
+const PLATFORM_META = {
+  instagram: { icon: "IG", label: "Instagram", iconClass: "instagram" },
+  twitter: { icon: "X", label: "X / Twitter", iconClass: "twitter" },
+  linkedin: { icon: "in", label: "LinkedIn", iconClass: "linkedin" },
+};
+
+async function loadAccountsTab() {
+  const status = await window.mediagrab.platformLoginStatus();
+  const list = $("#accountsList");
+  list.innerHTML = "";
+
+  for (const [platformId, meta] of Object.entries(PLATFORM_META)) {
+    const info = status[platformId] || { loggedIn: false };
+    const card = document.createElement("div");
+    card.className = `account-card${info.loggedIn ? " connected" : ""}`;
+    card.id = `account-${platformId}`;
+
+    const statusText = info.loggedIn
+      ? `Connected${info.lastLogin ? ` \u00b7 ${formatDate(info.lastLogin)}` : ""}`
+      : "Not connected";
+
+    card.innerHTML = `
+      <div class="account-icon ${meta.iconClass}">${meta.icon}</div>
+      <div class="account-info">
+        <div class="account-name">${meta.label}</div>
+        <div class="account-status${info.loggedIn ? " connected" : ""}">${statusText}</div>
+      </div>
+      <div class="account-actions">
+        ${
+          info.loggedIn
+            ? `
+          <button class="btn-login" data-action="relogin" data-platform="${platformId}">Refresh</button>
+          <button class="btn-logout" data-action="logout" data-platform="${platformId}">Disconnect</button>
+        `
+            : `
+          <button class="btn-login" data-action="login" data-platform="${platformId}">Log in</button>
+        `
+        }
+      </div>
+    `;
+
+    // Login / refresh
+    const loginBtn = card.querySelector(
+      '[data-action="login"], [data-action="relogin"]',
+    );
+    if (loginBtn) {
+      loginBtn.addEventListener("click", async () => {
+        loginBtn.disabled = true;
+        loginBtn.textContent = "Opening...";
+        showToast(`Opening ${meta.label} login...`);
+
+        const result = await window.mediagrab.platformLogin(platformId);
+        if (result.success) {
+          showToast(`${meta.label} connected!`, "success");
+        } else if (result.error !== "Login window closed") {
+          showToast(`Login failed: ${result.error}`, "error");
+        }
+
+        loadAccountsTab();
+      });
+    }
+
+    // Logout
+    const logoutBtn = card.querySelector('[data-action="logout"]');
+    if (logoutBtn) {
+      logoutBtn.addEventListener("click", async () => {
+        await window.mediagrab.platformLogout(platformId);
+        showToast(`${meta.label} disconnected`);
+        loadAccountsTab();
+      });
+    }
+
+    list.appendChild(card);
+  }
 }
 
 // ===== GLOBAL FUNCTIONS (called from onclick in HTML) =====

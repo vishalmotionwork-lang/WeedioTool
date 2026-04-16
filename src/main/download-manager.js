@@ -1,6 +1,11 @@
 const path = require("path");
 const { getVideoInfo, startDownload } = require("./binary-manager");
 const { addToHistory, isDuplicate } = require("./history");
+const {
+  getTwitterVideoInfo,
+  downloadDirectUrl,
+  isTwitterUrl,
+} = require("./twitter-downloader");
 
 const MAX_CONCURRENT = 3;
 
@@ -27,22 +32,33 @@ function createDownloadManager(mainWindow) {
     sendToRenderer("download:started", { id: item.id });
 
     try {
-      const download = startDownload(
-        item.url,
-        item.outputPath,
-        item.formatId,
-        (progress) => {
+      // Twitter: try direct MP4 download first (no yt-dlp needed)
+      if (isTwitterUrl(item.url) && item.directUrl) {
+        await downloadDirectUrl(item.directUrl, item.outputPath, (progress) => {
           sendToRenderer("download:progress", {
             id: item.id,
             ...progress,
           });
-        },
-        item.clipStart,
-        item.clipEnd,
-      );
+        });
+      } else {
+        // Standard yt-dlp download (with cookies auto-injected)
+        const download = startDownload(
+          item.url,
+          item.outputPath,
+          item.formatId,
+          (progress) => {
+            sendToRenderer("download:progress", {
+              id: item.id,
+              ...progress,
+            });
+          },
+          item.clipStart,
+          item.clipEnd,
+        );
 
-      item.process = download.process;
-      await download.promise;
+        item.process = download.process;
+        await download.promise;
+      }
 
       addToHistory({
         url: item.url,
@@ -66,6 +82,37 @@ function createDownloadManager(mainWindow) {
   }
 
   async function fetchInfo(url) {
+    // Twitter: try direct API first (no auth needed)
+    if (isTwitterUrl(url)) {
+      try {
+        const twitterInfo = await getTwitterVideoInfo(url);
+        if (twitterInfo) {
+          return {
+            title: twitterInfo.title,
+            thumbnail: twitterInfo.thumbnail,
+            duration: twitterInfo.duration,
+            extractor: "twitter",
+            webpage_url: url,
+            _directUrl: twitterInfo.url,
+            _method: twitterInfo.method,
+            formats: twitterInfo.variants.map((v, i) => ({
+              format_id: `direct-${i}`,
+              url: v.url,
+              vcodec: "h264",
+              acodec: "mp4a",
+              ext: "mp4",
+              height: null,
+              filesize: null,
+              tbr: v.bitrate ? v.bitrate / 1000 : null,
+            })),
+          };
+        }
+      } catch {
+        // Fall through to yt-dlp
+      }
+    }
+
+    // Standard yt-dlp path (cookies auto-injected for Instagram/LinkedIn/etc)
     const info = await getVideoInfo(url);
     return info;
   }
@@ -80,6 +127,7 @@ function createDownloadManager(mainWindow) {
     site,
     clipStart,
     clipEnd,
+    directUrl,
   }) {
     const duplicate = isDuplicate(url);
 
@@ -95,6 +143,7 @@ function createDownloadManager(mainWindow) {
       site,
       clipStart,
       clipEnd,
+      directUrl,
       status: "queued",
       duplicate,
     };

@@ -59,6 +59,8 @@
     <div class="tabs">
       <button class="tab active" data-tab="downloads">Downloads</button>
       <button class="tab" data-tab="images">Images</button>
+      <button class="tab" data-tab="transcripts">Transcripts</button>
+      <button class="tab" data-tab="accounts">Accounts</button>
     </div>
 
     <!-- Format picker (shown after URL fetch) -->
@@ -135,6 +137,74 @@
         <p>Paste a news article or website URL to extract images</p>
       </div>
       <div class="image-grid" id="imageGrid"></div>
+    </div>
+
+    <!-- Transcripts tab -->
+    <div class="tab-content" id="transcriptsTab">
+      <!-- Channel URL input -->
+      <div class="transcript-input-section">
+        <div class="transcript-url-row">
+          <input
+            type="text"
+            id="channelUrlInput"
+            placeholder="Paste YouTube channel URL (e.g. youtube.com/@channelname)"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <button id="fetchChannelBtn" class="btn-primary btn-sm" disabled>
+            <span class="btn-text">Load</span>
+            <span class="btn-loader" style="display:none"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Filters + actions (shown after videos load) -->
+      <div class="transcript-toolbar" id="transcriptToolbar" style="display:none">
+        <div class="transcript-filters">
+          <button class="filter-btn active" data-sort="date">Latest</button>
+          <button class="filter-btn" data-sort="views">Most Viewed</button>
+        </div>
+        <div class="transcript-actions-bar">
+          <label class="select-all-label">
+            <input type="checkbox" id="selectAllVideos">
+            <span>All</span>
+          </label>
+          <span class="selected-count" id="selectedCount">0 selected</span>
+          <button id="transcribeBtn" class="btn-primary btn-sm" disabled>Transcribe Selected</button>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyTranscripts">
+        <div class="empty-icon">📝</div>
+        <p>Paste a YouTube channel URL to load videos</p>
+        <p class="empty-sub">Select videos and download their transcripts as .txt files</p>
+      </div>
+
+      <!-- Video list -->
+      <div class="transcript-video-list" id="transcriptVideoList"></div>
+
+      <!-- Load more -->
+      <div class="transcript-load-more" id="transcriptLoadMore" style="display:none">
+        <button id="loadMoreBtn" class="btn-secondary btn-sm">Load More</button>
+      </div>
+
+      <!-- Transcript progress -->
+      <div class="transcript-progress" id="transcriptProgress" style="display:none">
+        <div class="transcript-progress-header">
+          <span id="transcriptProgressText">Transcribing...</span>
+        </div>
+        <div class="transcript-progress-list" id="transcriptProgressList"></div>
+      </div>
+    </div>
+
+    <!-- Accounts tab -->
+    <div class="tab-content" id="accountsTab">
+      <div class="accounts-header">
+        <h3>Connected Accounts</h3>
+        <p class="accounts-desc">Log in once to download private content. Your session is saved locally.</p>
+      </div>
+      <div class="accounts-list" id="accountsList"></div>
     </div>
 
   </div>
